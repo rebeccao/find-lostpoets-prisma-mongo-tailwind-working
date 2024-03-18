@@ -7,6 +7,11 @@
   --navbar-height: 56px;
 }
 
+.virtual-list-container {
+  height: calc(100vh - var(--navbar-height));
+  overflow: auto;
+}
+
 .sidebar {
   padding-top: var(--navbar-height);
 }

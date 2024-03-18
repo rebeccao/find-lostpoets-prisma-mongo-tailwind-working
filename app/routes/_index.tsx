@@ -1,8 +1,10 @@
 import { useLoaderData, useFetcher } from '@remix-run/react'
+import { InfiniteLoader, AutoSizer, CellMeasurer, CellMeasurerCache, Grid } from 'react-virtualized';
+import 'react-virtualized/styles.css'; // Import react-virtualized styles
 import { json } from '@remix-run/node'
 import type { LoaderFunction } from '@remix-run/node'
 import { prisma } from '~/utils/prisma.server'
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState } from 'react';
 import SidebarPanel from '~/components/sidebar/sidebar-panel';
 import ImageCard from '~/components/image-card';
 import {HiMenuAlt3} from 'react-icons/hi';
@@ -18,13 +20,15 @@ export type SearchCriteria = {
   orderBy?: { [key: string]: 'asc' | 'desc' }[];
 };
 
-interface LoaderData {
-  poets: Poet[];
-  error?: string; // Assuming error is a string. Adjust according to your actual structure.
-}
+//interface LoaderData {
+//  poets: Poet[];
+//  error?: string; // Assuming error is a string. Adjust according to your actual structure.
+//}
 
 const PAGE_SIZE = 20;
 const DATABASE_SIZE = 28170;
+const CARD_HEIGHT = 719; 
+const itemsPerRow = 6; 
 
 export interface SidebarProps {
 	searchTrait: Record<string, string>;
@@ -143,135 +147,41 @@ function Index() {
   const [currentDbQuery, setCurrentDbQuery] = useState<SearchCriteria>({ orderBy: [{ pid: 'asc' }], take: PAGE_SIZE, skip: 0 });
 	const [poets, setPoets] = useState<Poet[]>(initialData.poets || []);
 	const [page, setPage] = useState(1); // Pagination state
-	const [fetcherData, setFetcherData] = useState<LoaderData | null>(null);
+	//const [fetcherData, setFetcherData] = useState<LoaderData | null>(null);
 	const [hasMore, setHasMore] = useState<boolean>(true);
 	const [fetchError, setFetchError] = useState<string | null>(null);
-	const [sentinelIndex, setSentinelIndex] = useState<number>(PAGE_SIZE - 1);
+	//const [sentinelIndex, setSentinelIndex] = useState<number>(PAGE_SIZE - 1);
 	
-	const globalObserver = useRef<IntersectionObserver | null>(null);
+	//const globalObserver = useRef<IntersectionObserver | null>(null);
 
 	/*************** Infinite scroll logic ****************/
 
-	// fetcher.data useEffect
-	// In the useFetcher hook, the fetcher.data property is automatically managed
-	// by Remix based on the lifecycle of the fetch operation and it can not directly
-	// be set to null. Copy it to a fetcherData state and use that state to control
-	// the infinite scrolling
-  useEffect(() => {
-		const data = fetcher.data as LoaderData;
-		try {
-			if (data && data.poets.length > 0) {
-				setFetcherData(data);
-				if (data.poets.length < PAGE_SIZE) { setHasMore(false) }
-				setFetchError(null);
-				console.log("fetcher.data useEffect fetcher.data.poets.length = ", data.poets.length);
-			}
-		} catch (error) {
-			console.error(error);
-    	setFetchError('A fetcher error occurred.');
-		}
-  }, [fetcher.data]);
-
-	// fetchMorePoets
-	const fetchMorePoets = useCallback((nextPage: boolean = false) => {
-		if (!nextPage) return; 
-
-		const newSkip = nextPage ? (page) * PAGE_SIZE : 0;
-		const newQuery: SearchCriteria = { ...currentDbQuery, skip: newSkip, take: PAGE_SIZE };
-		console.log("<--------> fetchMorePoets newQuery = ", newQuery);
-
-		if (globalObserver.current && nextPage) {
-			globalObserver.current.disconnect(); // Temporarily disconnect
-			console.log("fetchMorePoets --- globalObserver.current.disconnect");
-		}
+	const fetchMorePoets = async (startIndex: number, stopIndex: number): Promise<void> => {
+		// Construct a new query with updated skip value
+		const newQuery: SearchCriteria = { ...currentDbQuery, skip: startIndex, take: PAGE_SIZE };
 		
+		console.log("fetchMorePoets: Fetching poets startIndex = ", startIndex, ", stopIndex = ", stopIndex);
+
 		setCurrentDbQuery(newQuery);		// Update current query skip
 
 		const queryString = JSON.stringify(newQuery);
 		const dbQueryString = new URLSearchParams({ query: queryString }).toString();
-		fetcher.load(`?index&${dbQueryString}`);
 
-		setPage(prev => prev + 1);
-		console.log("fetchMorePoets --- page = ", page);
-
-	}, [page, currentDbQuery, fetcher]);
-
-	// setupObserver callback
-	const setupObserver = useCallback((sentinelSelector: string) => {
-		console.log("setupObserver sentinelSelector = ", sentinelSelector);
-
-		// Disconnect the current observer if it exists
-		if (globalObserver.current) {
-			globalObserver.current.disconnect();
-			console.log("setupObserver globalObserver.current.disconnect() = ", globalObserver.current);
-		}
-		
-		const observerCallback = (entries: IntersectionObserverEntry[]) => {
-			if (entries[0].isIntersecting) {
-				fetchMorePoets(true);
+		try {
+			const response = await fetch(`?index&${dbQueryString}`);
+			if (!response.ok) {
+				throw new Error('Network response was not ok');
 			}
-		};
-
-		const observerOptions = { threshold: 0.1 };
-		const observer = new IntersectionObserver(observerCallback, observerOptions);
-
-		const sentinel = document.querySelector(sentinelSelector);
-		if (sentinel) {
-			observer.observe(sentinel);
-			console.log("setupObserver observer.observe(sentinel) sentinelSelector = ", sentinelSelector);
-		}
-
-		// Assigning observer to globalObserver for later access
-		globalObserver.current = observer;
-		console.log("setupObserver globalObserver.current = sentinelSelector = ", sentinelSelector);
-	}, [fetchMorePoets]);
-
-	// InitialData useEffect
-	useEffect(() => {
-		console.log("InitialData useEffect --- initialData.poets.length = ", initialData.poets.length, "poets.length = ", poets.length);
-		if (initialData.poets.length > 0) {
-      // This ensures observer is setup only after initial data is loaded
-      // and if globalObserver is initialized 
-      if (!globalObserver.current && initialData.poets.length === PAGE_SIZE) {
-				console.log("InitialData useEffect setupObserver #poet-$initialData.poets[19].pid");
-        setupObserver(`#poet-${initialData.poets[19].pid}`);
-      }
-    }
-	}, [poets, initialData.poets, setupObserver]); // Depends on the initial poets list.
-
-	// Merge fetcherData useEffect
-	useEffect(() => {
-		console.log("---- Merge fetcherData useEffect ----");
-		if (fetcherData) {
-			if (!fetcherData.error) {
-				if (fetcherData.poets && fetcherData.poets.length > 0) {
-					setPoets((prevPoets: Poet[]) => [...prevPoets, ...fetcherData.poets]);
-					setFetcherData(null);
-					console.log("Merge fetcherData useEffect --- setPoets append new poets");
-				} 
-				setFetchError(null);
-			} else { 
-				console.log("Merge fetcherData useEffect --- data.error");
-				console.error(fetcherData.error);
-				setFetchError(fetcherData.error);
-			}
-		}
-	}, [fetcherData]);
+			const newPoets = await response.json();
 	
-	// newSentinelIndex useEffect
-	useEffect(() => {
-		if (poets && poets.length > 0) {
-			console.log("sentinelIndex useEffect --- poets.length = ", poets.length, "hasMore = ", hasMore);
-			const lastPoetIndex = poets.length - 1;
-			console.log("sentinelIndex useEffect --- lastPoetIndex = ", lastPoetIndex, "sentinelIndex = ", sentinelIndex);
-			// Make sure that new poets have been fetched and appended to poets buffer before setting up a new observer
-			if (lastPoetIndex !== sentinelIndex && hasMore) {
-				setSentinelIndex(lastPoetIndex);
-				console.log("sentinelIndex useEffect #poet-$poets[sentinelIndex]?.pid sentinelIndex = ", lastPoetIndex);
-				setupObserver(`#poet-${poets[lastPoetIndex]?.pid}`);
-			}
+			// Assuming setPoets is your state updater for appending new poets
+			setPoets((currentPoets) => [...currentPoets, ...newPoets]);
+		} catch (error) {
+			console.error("Failed to fetch more poets:", error);
+			// Handle any error states here, e.g., showing an error message to the user
 		}
-	}, [poets, sentinelIndex, hasMore, setupObserver]);
+	};
+		
 
 	/*************** SidebarPanel callback logic ****************/
 
@@ -309,9 +219,7 @@ function Index() {
 		}
 
 		setHasMore(true);
-		setFetcherData(null);
 		setPoets([]);
-		setSentinelIndex(0);		// sentinelIndex must not equal the index in setupObserver
 
 		setCurrentDbQuery(query);
 		console.log('performSearch: query));', query);
@@ -357,6 +265,25 @@ function Index() {
 		}
 	};
 
+	/*************** react virtualizer logic ****************/
+
+	// Create a cache for cell measurements
+  const cache = new CellMeasurerCache({
+    fixedWidth: true,
+    defaultHeight: CARD_HEIGHT, // Default height for your ImageCard, adjust as needed
+  });
+
+  // isRowLoaded function for InfiniteLoader
+  const isRowLoaded = ({ index }: { index: number }) => {
+    return !!poets[index]; // Check if the poet data has been loaded
+  };
+
+	const loadMoreRows = ({ startIndex, stopIndex }: { startIndex: number; stopIndex: number }): Promise<void> => {
+		return fetchMorePoets(startIndex, stopIndex);
+	};
+	
+	/*************** misc logic ****************/
+
 	// Extract title from sidebarItems based on item.type === 'sort' and expanded item.dbField
 	//const selectedRareTraitLabel = sidebarItems.find(item => item.type === 'sort')?.expandedSidebarItems.find(item => item.dbField === selectedRareTrait)?.title;
 	// Example logic to convert 'brdCnt' into 'brd', etc.
@@ -381,7 +308,7 @@ function Index() {
 			<div className="flex flex-col w-full">
 				<Navbar toggleSidebar={toggleSidebar} />
 				<div className={`transition-all duration-300 ${sidebarOpen ? 'ml-80' : 'ml-0'}`}>
-					<div className="mt-4 px-4">
+				<div className="mt-4 px-4 virtual-list-container"  style={{ height: '100vh', width: '100%' }}>
 						{/* Display loading state */}
 						{fetcher.state === 'loading' && <div>Loading...</div>}
 
@@ -393,20 +320,70 @@ function Index() {
 							</div>
 						)}
 
-						<div className="grid grid-cols-4 gap-4">
-							{poets?.map((poet: Poet, index: number) => (
-								<div key={poet.id} id={`poet-${poet.pid}`}>
+						{/* InfiniteLoader manages loading data as the user scrolls */}
+						<InfiniteLoader
+							isRowLoaded={isRowLoaded}
+							loadMoreRows={loadMoreRows}
+							rowCount={DATABASE_SIZE} // Total number of poets
+						>
+							{({ onRowsRendered, registerChild }) => (
+								// AutoSizer automatically adjusts the grid size based on available space
+								<AutoSizer>
+									{({ width, height }) => (
+										<Grid
+											ref={registerChild}
+											onSectionRendered={({ rowStartIndex, rowStopIndex }) =>
+												onRowsRendered({ startIndex: rowStartIndex, stopIndex: rowStopIndex })}
+											cellRenderer={({ columnIndex, key, rowIndex, style, parent }) => {
+												const poetIndex = rowIndex * itemsPerRow + columnIndex;
+												const poet = poets[poetIndex];
+												return poet ? (
+													<CellMeasurer
+														cache={cache}
+														columnIndex={columnIndex}
+														key={key}
+														parent={parent}
+														rowIndex={rowIndex}
+													>
+														<div style={style}>
+															<ImageCard
+																key={poet.pid} 
+																poet={poet} 
+																// Dynamically access the Poet property and rarity count
+																rarityTraitLabel={searchButtonPressed ? `${poet[selectedRareTraitLabel as keyof Poet]}` : undefined}
+																rarityCount={searchButtonPressed && selectedRareTrait ? poet[selectedRareTrait as keyof Poet] as number : undefined}
+															/>
+														</div>
+													</CellMeasurer>
+												) : null;
+											}}
+											columnCount={itemsPerRow}
+											columnWidth={cache.columnWidth}
+											height={height}
+											rowCount={Math.ceil(poets.length / itemsPerRow)}
+											rowHeight={cache.rowHeight}
+											width={width}
+										/>
+									)}
+								</AutoSizer>
+							)}
+						</InfiniteLoader>
+						<div id="scroll-sentinel" />
+
+            {/*<div className="grid grid-cols-6 gap-4">
+							{rowVirtualizer.getVirtualItems().map((virtualRow) => {
+								const poet = poets[virtualRow.index];
+								return (
 									<ImageCard 
 										key={poet.pid} 
-										poet={poet}
-										// Dynamically access the Poet property
+										poet={poet} 
+										// Dynamically access the Poet property and rarity count
 										rarityTraitLabel={searchButtonPressed ? `${poet[selectedRareTraitLabel as keyof Poet]}` : undefined}
-										// Dynamically access the rarity count
 										rarityCount={searchButtonPressed && selectedRareTrait ? poet[selectedRareTrait as keyof Poet] as number : undefined}
 									/>
-								</div>
-							))}
-						</div>
+								);
+							})}
+            </div>*/}
 					</div>
 				</div>
 			</div>
